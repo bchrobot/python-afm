@@ -114,7 +114,7 @@ def purchase(csv_input, csv_output, auto_purchase, service_sid):
                             .services(service_sid) \
                             .phone_numbers \
                             .create(phone_number_sid=phone_number_sid)
-                            row['service_status'] = 'success'
+                        row['service_status'] = 'success'
                     except Exception:
                         row['service_status'] = 'error'
                         row['message'] = str(exc)
