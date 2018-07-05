@@ -5,17 +5,20 @@ Helper scripts for the Abdul for Michigan campaign.
 
 # Installation
 
-If you don't use `pipsi`, you're missing out.
-Here are [installation instructions](https://github.com/mitsuhiko/pipsi#readme).
-
 Simply run:
 
-    $ pipsi install .
+    
+```
+$ git clone https://github.com/bchrobot/python-afm.git
+$ cd python-afm
+$ pip install .
+```
 
 
 # Usage
 
 To use it:
 
-    $ afm --help
-
+```
+$ afm --help
+```
