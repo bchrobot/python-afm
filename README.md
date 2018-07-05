@@ -8,9 +8,13 @@ Helper scripts for the Abdul for Michigan campaign.
 Simply run:
 
     
-```
+```sh
 $ git clone https://github.com/bchrobot/python-afm.git
 $ cd python-afm
+$ cp .env-dist .env
+$ vi .env
+# Update Twilio variables
+
 $ pip install .
 ```
 
@@ -19,6 +23,6 @@ $ pip install .
 
 To use it:
 
-```
+```sh
 $ afm --help
 ```

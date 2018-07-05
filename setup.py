@@ -3,7 +3,7 @@ Helper scripts for the Abdul for Michigan campaign.
 """
 from setuptools import find_packages, setup
 
-dependencies = ['click']
+dependencies = ['click', 'python-dotenv', 'twilio']
 
 setup(
     name='afm',
@@ -21,7 +21,7 @@ setup(
     install_requires=dependencies,
     entry_points={
         'console_scripts': [
-            'afm = afm.cli:main',
+            'afm = afm.cli:cli',
         ],
     },
     classifiers=[
@@ -41,7 +41,6 @@ setup(
         'Operating System :: Unix',
         'Operating System :: Microsoft :: Windows',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2',
         'Programming Language :: Python :: 3',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ]
