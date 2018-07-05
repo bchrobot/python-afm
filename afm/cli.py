@@ -22,6 +22,28 @@ def cli():
     """Helper scripts for the Abdul for Michigan campaign."""
     pass
 
+@cli.group()
+def analysis():
+    """Tools for analysis."""
+    pass
+
+
+@analysis.command()
+@click.argument('csv-input', type=click.File('r'))
+def number_stats(csv_input):
+    """Breakdown Twilio send/receive logs to find number of texts sent from each Twilio number."""
+    reader = csv.DictReader(csv_input)
+
+    from_number_count = defaultdict(int)
+
+    for row in reader:
+        if row['Direction'] != 'inbound':
+            from_number_count[row['From']] += 1
+
+    click.echo('Breakdown by number sent from:')
+    for key, value in from_number_count.items():
+        click.echo(f'{key}: {value}')
+
 
 @cli.group()
 def twilio():
