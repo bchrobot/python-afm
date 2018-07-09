@@ -45,6 +45,44 @@ def number_stats(csv_input):
         click.echo(f'{key}: {value}')
 
 
+@analysis.command()
+@click.argument('superset-csv', type=click.File('r'))
+@click.argument('subset-csv', type=click.File('r'))
+@click.argument('csv-output', type=click.File('w'))
+def dedup(superset_csv, subset_csv, csv_output):
+    """Remove all the numbers in subset-csv from superset-csv, saving the result to the output."""
+    superset_reader = csv.DictReader(superset_csv)
+    subset_reader = csv.DictReader(subset_csv)
+
+    fieldnames = superset_reader.fieldnames
+    writer = csv.DictWriter(csv_output,
+                            lineterminator='\n',
+                            fieldnames=fieldnames)
+    writer.writeheader()
+
+    def format_cell(cell):
+        """Ensure cell numbers have a leading +1."""
+        if '+1' not in cell:
+            return f'+1{cell}'
+        return cell
+
+    subset_numbers = set([format_cell(row['contact[cell]'])
+                          for row in subset_reader])
+
+    dup_count = 0
+    untouched_count = 0
+    for row in superset_reader:
+        cell = format_cell(row['cell'])
+        if cell not in subset_numbers:
+            writer.writerow(row)
+            untouched_count += 1
+        else:
+            dup_count += 1
+
+    click.echo(f'Removed {dup_count} duplicate numbers.')
+    click.echo(f'There were {untouched_count} remaining numbers.')
+
+
 @cli.group()
 def twilio():
     """Commands for interacting with Twilio."""
