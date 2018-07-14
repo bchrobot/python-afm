@@ -62,9 +62,8 @@ def dedup(superset_csv, subset_csv, csv_output):
 
     def format_cell(cell):
         """Ensure cell numbers have a leading +1."""
-        if '+1' not in cell:
-            return f'+1{cell}'
-        return cell
+        cell_ten = cell[-10:]
+        return f'+1{cell_ten}'
 
     subset_numbers = set([format_cell(row['contact[cell]'])
                           for row in subset_reader])
