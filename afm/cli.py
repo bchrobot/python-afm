@@ -5,13 +5,19 @@ import os
 from collections import defaultdict
 import csv
 from pprint import pprint
+from urllib.parse import urlparse
+import requests
 
 import click
 from dotenv import load_dotenv, find_dotenv
 from twilio.rest import Client
+import psycopg2
+import psycopg2.extras
 
 
 load_dotenv(find_dotenv())
+van_api_key = os.getenv('VAN_API_KEY', None)
+database_url = os.getenv('DATABASE_URL', None)
 account_sid = os.getenv('TWILIO_ACCOUNT_SID', None)
 auth_token = os.getenv('TWILIO_AUTH_TOKEN', None)
 client = Client(account_sid, auth_token)
@@ -259,3 +265,101 @@ def sms(csv_input, csv_output):
         print('30007 breakdown by carrier:')
         for key, value in carrier_count.items():
             click.echo(f'{key}: {value}')
+
+
+@cli.group()
+def van():
+    """Tools for working with VAN."""
+    pass
+
+
+@van.command()
+@click.argument('campaign-id')
+def sync_responses(campaign_id):
+    """Re-send survey responses to VAN."""
+    if not database_url:
+        raise click.Abort('DATABASE_URL environment variable is required!')
+    if not van_api_key:
+        raise click.Abort('VAN_API_KEY environment variable is required!')
+
+    result = urlparse(database_url)
+    username = result.username
+    password = result.password
+    database = result.path[1:]
+    hostname = result.hostname
+    connection = psycopg2.connect(
+        database = database,
+        user = username,
+        password = password,
+        host = hostname
+    )
+    cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # 1. Limit question responses to the specified campaign via `campaign_contact.campaign_id`
+    # 2. Limit interaction steps to the specified campaign
+    # 3. Find the interaction step corresponding to the question response by comparing `value` and `answer_option` (seems like this should really be a foreign key...)
+    # 4. Ignore question responses that don't map to an external response
+    # 5. Grab the external question from the parent interaction step
+    # 6. Select fields necessary to submit to external system
+    cursor.execute(f'''
+        SELECT qr.id AS qr_id,
+            to_json(qr.created_at) AS qr_created_at,
+            qr.value AS qr_value,
+            cc.external_id AS cc_external_id,
+            istep.external_response,
+            pstep.external_question AS external_question
+        FROM question_response AS qr
+        INNER JOIN campaign_contact AS cc
+            ON qr.campaign_contact_id = cc.id
+        INNER JOIN interaction_step AS istep
+            ON qr.value = istep.answer_option
+        INNER JOIN interaction_step AS pstep
+            ON istep.parent_interaction_id = pstep.id
+        WHERE cc.campaign_id = {campaign_id}
+            AND istep.campaign_id = {campaign_id}
+            AND istep.external_response != '';
+        ''')
+
+    records = cursor.fetchall()
+    errors = []
+
+    click.echo(f'There are {len(records)} records')
+
+    with click.progressbar(records, label='Updating records') as bar:
+        for record in bar:
+            cc_external_id = record['cc_external_id']
+            action_date = record['qr_created_at']
+            external_question = record['external_question']
+            external_response = int(record['external_response'])
+
+            url = f'https://osdi.ngpvan.com/api/v1/people/{cc_external_id}/record_canvass_helper/'
+
+            headers = {
+                'OSDI-Api-Token': van_api_key,
+                'Content-type': 'application/hal+json',
+            }
+
+            body = {
+                'canvass': {
+                    'action_date': action_date,
+                    'contact_type': 'phone',
+                    'success': True,
+                    'status_code': '',
+                },
+                'add_answers': [{
+                    'question': external_question,
+                    'responses': [external_response],
+                }],
+            }
+
+            result = requests.post(url, headers=headers, json=body)
+
+            if result.status_code != 200:
+                error.append((cc_external_id, result.status_code, result.reason))
+
+    click.echo('Completed')
+    if errors:
+        click.echo('Erros:')
+        pprint(errors)
+
+    connection.close()

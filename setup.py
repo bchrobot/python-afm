@@ -3,7 +3,7 @@ Helper scripts for the Abdul for Michigan campaign.
 """
 from setuptools import find_packages, setup
 
-dependencies = ['click', 'python-dotenv', 'twilio']
+dependencies = ['click', 'python-dotenv', 'twilio', 'psycopg2']
 
 setup(
     name='afm',
