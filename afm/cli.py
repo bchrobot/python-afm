@@ -342,7 +342,7 @@ def sync_responses(campaign_id):
             body = {
                 'canvass': {
                     'action_date': action_date,
-                    'contact_type': 'phone',
+                    'contact_type': 'SMS Text',
                     'success': True,
                     'status_code': '',
                 },
