@@ -16,11 +16,11 @@ import psycopg2.extras
 
 
 load_dotenv(find_dotenv())
-van_api_key = os.getenv('VAN_API_KEY', None)
-database_url = os.getenv('DATABASE_URL', None)
-account_sid = os.getenv('TWILIO_ACCOUNT_SID', None)
-auth_token = os.getenv('TWILIO_AUTH_TOKEN', None)
-client = Client(account_sid, auth_token)
+VAN_API_KEY = os.getenv('VAN_API_KEY', None)
+DATABASE_URL = os.getenv('DATABASE_URL', None)
+ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', None)
+AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', None)
+client = Client(ACCOUNT_SID, AUTH_TOKEN)    # pylint:disable=invalid-name
 
 
 @click.group()
@@ -108,15 +108,16 @@ def count(group_by_area_code):
         for number in incoming_phone_numbers:
             area_code = number.phone_number[2:5]
             area_codes[area_code] += 1
-        for area_code, count in area_codes.items():
-            click.echo(f'({area_code}): {count}')
+        for area_code, number_count in area_codes.items():
+            click.echo(f'({area_code}): {number_count}')
 
 
 @twilio.command()
 @click.argument('csv-input', type=click.File('r'))
 @click.argument('csv-output', type=click.File('w'))
 @click.option('--auto-purchase', '-y', is_flag=True,
-              help='Purchase maximum available numbers if less than the requested requested_quantity.')
+              help=('Purchase maximum available numbers if less than the requested '
+                    'requested_quantity.'))
 @click.option('--service-sid', '-s', help='Messaging service SID to add new numbers to.')
 def purchase(csv_input, csv_output, auto_purchase, service_sid):
     """Purchase new Twilio numbers based on the specified area code counts.
@@ -131,7 +132,8 @@ def purchase(csv_input, csv_output, auto_purchase, service_sid):
         numbers = client.available_phone_numbers('US').local.list(area_code=area_code)
         available_count = len(numbers)
         if available_count == 0:
-            click.echo(f'Area code ({area_code}) has {available_count} available numbers. Skipping this area code.')
+            click.echo((f'Area code ({area_code}) has {available_count} available numbers. '
+                        'Skipping this area code.'))
             continue
         elif available_count < requested_quantity:
             prompt = (f'Area code ({area_code}) only has {available_count} available numbers.'
@@ -143,8 +145,8 @@ def purchase(csv_input, csv_output, auto_purchase, service_sid):
 
     click.echo('Please confirm your order:')
     for area_code, number_list in purchase_order.items():
-        count = len(number_list)
-        click.echo(f'({area_code}): {count}')
+        number_count = len(number_list)
+        click.echo(f'({area_code}): {number_count}')
     if click.confirm('\nIs this correct?', abort=True):
         fieldnames = ['area_code', 'number', 'purchase_status', 'service_status', 'message']
         writer = csv.DictWriter(csv_output,
@@ -166,21 +168,23 @@ def purchase(csv_input, csv_output, auto_purchase, service_sid):
                 try:
                     client.incoming_phone_numbers.create(phone_number=phone_number)
                     row['purchase_status'] = 'success'
-                except Exception as exc:
+                except Exception as exc:        # pylint:disable=broad-except
                     row['purchase_status'] = 'error'
                     row['message'] = str(exc)
 
                 # Add to messaging service
                 if service_sid:
                     try:
-                        incoming_phone_number = client.incoming_phone_numbers.list(phone_number=phone_number)[0]
+                        incoming_phone_number = client.incoming_phone_numbers.list(
+                            phone_number=phone_number
+                        )[0]
                         phone_number_sid = incoming_phone_number.sid
                         phone_number = client.messaging \
                             .services(service_sid) \
                             .phone_numbers \
                             .create(phone_number_sid=phone_number_sid)
                         row['service_status'] = 'success'
-                    except Exception:
+                    except Exception as exc:    # pylint:disable=broad-except
                         row['service_status'] = 'error'
                         row['message'] = str(exc)
 
@@ -201,8 +205,8 @@ def count(service_sid):
         .services(service_sid) \
         .phone_numbers \
         .list()
-    count = len(phone_numbers)
-    click.echo(f'Found {count} numbers in service {service_sid}')
+    number_count = len(phone_numbers)
+    click.echo(f'Found {number_count} numbers in service {service_sid}')
 
 
 @service.command()
@@ -225,7 +229,7 @@ def add(csv_input, service_sid):
 @click.argument('csv-input', type=click.File('r'))
 @click.argument('csv-output', type=click.File('w'))
 @click.option('--quiet', '-q', is_flag=True, help='Do not print stats. Only write to output csv.')
-def sms(csv_input, csv_output):
+def sms(csv_input, csv_output, quiet):
     """Lookup carrier information from an input Twilio error log csv and
     write an Output csv with additional 'Carrier' column.
     """
@@ -277,27 +281,28 @@ def van():
 @click.argument('campaign-id')
 def sync_responses(campaign_id):
     """Re-send survey responses to VAN."""
-    if not database_url:
+    if not DATABASE_URL:
         raise click.Abort('DATABASE_URL environment variable is required!')
-    if not van_api_key:
+    if not VAN_API_KEY:
         raise click.Abort('VAN_API_KEY environment variable is required!')
 
-    result = urlparse(database_url)
+    result = urlparse(DATABASE_URL)
     username = result.username
     password = result.password
     database = result.path[1:]
     hostname = result.hostname
     connection = psycopg2.connect(
-        database = database,
-        user = username,
-        password = password,
-        host = hostname
+        database=database,
+        user=username,
+        password=password,
+        host=hostname
     )
     cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
     # 1. Limit question responses to the specified campaign via `campaign_contact.campaign_id`
     # 2. Limit interaction steps to the specified campaign
-    # 3. Find the interaction step corresponding to the question response by comparing `value` and `answer_option` (seems like this should really be a foreign key...)
+    # 3. Find the interaction step corresponding to the question response by comparing `value` and
+    #    `answer_option` (seems like this should really be a foreign key...)
     # 4. Ignore question responses that don't map to an external response
     # 5. Grab the external question from the parent interaction step
     # 6. Select fields necessary to submit to external system
@@ -325,8 +330,8 @@ def sync_responses(campaign_id):
 
     click.echo(f'There are {len(records)} records')
 
-    with click.progressbar(records, label='Updating records') as bar:
-        for record in bar:
+    with click.progressbar(records, label='Updating records') as progess_bar:
+        for record in progess_bar:
             cc_external_id = record['cc_external_id']
             action_date = record['qr_created_at']
             external_question = record['external_question']
@@ -335,7 +340,7 @@ def sync_responses(campaign_id):
             url = f'https://osdi.ngpvan.com/api/v1/people/{cc_external_id}/record_canvass_helper/'
 
             headers = {
-                'OSDI-Api-Token': van_api_key,
+                'OSDI-Api-Token': VAN_API_KEY,
                 'Content-type': 'application/hal+json',
             }
 
@@ -355,7 +360,7 @@ def sync_responses(campaign_id):
             result = requests.post(url, headers=headers, json=body)
 
             if result.status_code != 200:
-                error.append((cc_external_id, result.status_code, result.reason))
+                errors.append((cc_external_id, result.status_code, result.reason))
 
     click.echo('Completed')
     if errors:
