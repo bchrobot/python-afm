@@ -23,6 +23,12 @@ AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', None)
 client = Client(ACCOUNT_SID, AUTH_TOKEN)    # pylint:disable=invalid-name
 
 
+def format_cell(cell):
+    """Ensure cell numbers have a leading +1."""
+    cell_ten = cell[-10:]
+    return f'+1{cell_ten}'
+
+
 @click.group()
 def cli():
     """Helper scripts for the Abdul for Michigan campaign."""
@@ -65,11 +71,6 @@ def dedup(superset_csv, subset_csv, csv_output):
                             lineterminator='\n',
                             fieldnames=fieldnames)
     writer.writeheader()
-
-    def format_cell(cell):
-        """Ensure cell numbers have a leading +1."""
-        cell_ten = cell[-10:]
-        return f'+1{cell_ten}'
 
     subset_numbers = set([format_cell(row['contact[cell]'])
                           for row in subset_reader])
@@ -368,3 +369,118 @@ def sync_responses(campaign_id):
         pprint(errors)
 
     connection.close()
+
+
+@cli.group()
+def spoke():
+    """Tools for interacting with a Spoke instance."""
+    pass
+
+
+@spoke.command()
+@click.option('--number-column', '-n', default='phone',
+              help='Name of the column phone numbers are kept in.')
+@click.option('--organization-id', '-o',
+              help='ID of the organization to upload the Opt Outs to.')
+@click.option('--campaign-id', '-c',
+              help='ID of the dummy campaign to upload the Opt Outs to.')
+@click.option('--assignment-id', '-a',
+              help='ID of the dummy assignment to upload the Opt Outs to.')
+@click.option('--user-id', '-u',
+              help='ID of the user to link the Opt Outs to.')
+@click.argument('opt-outs-input', type=click.File('r'))
+def upload_opt_outs(number_column, organization_id, campaign_id, assignment_id, user_id, opt_outs_input):
+    """Upload list of opt-outs to Spoke."""
+    if not DATABASE_URL:
+        raise click.Abort('DATABASE_URL environment variable is required!')
+
+    result = urlparse(DATABASE_URL)
+    username = result.username
+    password = result.password
+    database = result.path[1:]
+    hostname = result.hostname
+    connection = psycopg2.connect(
+        database=database,
+        user=username,
+        password=password,
+        host=hostname
+    )
+    cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    # reader = csv.DictReader(opt_outs_input)
+
+    def exit_smoothly(message=None, exc=None):
+        """Handle exits (with errors)."""
+        cursor.close()
+        connection.close()
+
+        if exc:
+            if not message:
+                message = 'There was an error:'
+            click.echo(message)
+            click.Abort(str(exc))
+        elif message:
+            click.Abort(message)
+
+    # Parse list
+    try:
+        opt_out_numbers = [(format_cell(row[number_column]),) for row in reader]
+    except KeyError:
+        exit_smoothly(f'Column {number_column} does not exist!')
+
+    if not campaign_id:
+        # Create dummy campaign to link opt-outs to
+        title = 'Dummy Opt-Out Holder'
+        description = ('This campaign was created as part of uploading an existing opt-out list. '
+                       'Do not touch!')
+        campaign_sql = ('INSERT INTO campaign '
+                        '(organization_id, title, description, is_archived) '
+                        f'VALUES ({organization_id}, \'{title}\', \'{description}\', true) '
+                        'RETURNING id;')
+        try:
+            cursor.execute(campaign_sql)
+            campaign_id = cursor.fetchone()[0]
+            print(f'Created dummy campaign with ID: {campaign_id}')
+        except Exception as exc:
+            connection.rollback()
+            exit_smoothly('Error inserting dummy campaign', exc)
+
+    if not assignment_id:
+        # Create dummy assignment to link opt-outs to
+        assignment_sql = ('INSERT INTO assignment '
+                          '(user_id, campaign_id, max_contacts) '
+                          f'VALUES ({user_id}, {campaign_id}, 0) '
+                          'RETURNING id;')
+        try:
+            cursor.execute(assignment_sql)
+            assignment_id = cursor.fetchone()[0]
+            print(f'Created dummy assignment with ID: {assignment_id}')
+        except Exception as exc:
+            connection.rollback()
+            exit_smoothly('Error inserting dummy assignment:', exc)
+
+    # Insert Opt-Outs
+    data = [(number, assignment_id, organization_id, 'manual_upload')
+            for number in opt_out_numbers]
+    insert_query = ('INSERT INTO opt_out '
+                    '(cell, assignment_id, organization_id, reason_code) '
+                    'VALUES %s ON CONFLICT DO NOTHING;')
+    try:
+        psycopg2.extras.execute_values(
+            cursor, insert_query, data, template=None, page_size=100
+        )
+        # Wait until final operation succeeds to commit
+        connection.commit()
+        print('Executed bulk insert.')
+    except Exception as exc:
+        connection.rollback()
+        exit_smoothly('Error inserting opt-outs', exc)
+
+    confirm_sql = f'SELECT count(*) FROM opt_out WHERE assignment_id = %s;'
+    try:
+        cursor.execute(confirm_sql, (assignment_id))
+        insert_count = cursor.fetchone()[0]
+        print(f'Inserted {insert_count} Opt-Out records.')
+    except Exception as exc:
+        exit_smoothly('There was an error fetching the insert count', exc)
+
+    exit_smoothly()
