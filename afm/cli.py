@@ -25,6 +25,11 @@ client = Client(ACCOUNT_SID, AUTH_TOKEN)    # pylint:disable=invalid-name
 
 def format_cell(cell):
     """Ensure cell numbers have a leading +1."""
+    cell = cell.strip()
+    cell = cell.replace(' ', '')
+    cell = cell.replace('(', '')
+    cell = cell.replace(')', '')
+    cell = cell.replace('-', '')
     cell_ten = cell[-10:]
     return f'+1{cell_ten}'
 
@@ -131,6 +136,140 @@ def purchase(csv_input, csv_output, auto_purchase, service_sid):
         area_code = row['area_code']
         requested_quantity = int(row['quantity'])
         numbers = client.available_phone_numbers('US').local.list(area_code=area_code)
+        available_count = len(numbers)
+        if available_count == 0:
+            click.echo((f'Area code ({area_code}) has {available_count} available numbers. '
+                        'Skipping this area code.'))
+            continue
+        elif available_count < requested_quantity:
+            prompt = (f'Area code ({area_code}) only has {available_count} available numbers.'
+                      f'You requested {requested_quantity}.\n\n'
+                      f'Would you like to purchase {available_count} instead?')
+            if not auto_purchase and not click.confirm(prompt):
+                continue
+        purchase_order[area_code] = numbers[0:requested_quantity]
+
+    click.echo('Please confirm your order:')
+    for area_code, number_list in purchase_order.items():
+        number_count = len(number_list)
+        click.echo(f'({area_code}): {number_count}')
+    if click.confirm('\nIs this correct?', abort=True):
+        fieldnames = ['area_code', 'number', 'purchase_status', 'service_status', 'message']
+        writer = csv.DictWriter(csv_output,
+                                lineterminator='\n',
+                                fieldnames=fieldnames)
+        writer.writeheader()
+
+        results = {'success': 0, 'error': 0}
+        for area_code, number_list in purchase_order.items():
+            results[area_code] = {}
+            for number in number_list:
+                phone_number = number.phone_number
+                row = {
+                    'area_code': area_code,
+                    'number': phone_number
+                }
+
+                # Purchase number
+                try:
+                    client.incoming_phone_numbers.create(phone_number=phone_number)
+                    row['purchase_status'] = 'success'
+                except Exception as exc:        # pylint:disable=broad-except
+                    row['purchase_status'] = 'error'
+                    row['message'] = str(exc)
+
+                # Add to messaging service
+                if service_sid:
+                    try:
+                        incoming_phone_number = client.incoming_phone_numbers.list(
+                            phone_number=phone_number
+                        )[0]
+                        phone_number_sid = incoming_phone_number.sid
+                        phone_number = client.messaging \
+                            .services(service_sid) \
+                            .phone_numbers \
+                            .create(phone_number_sid=phone_number_sid)
+                        row['service_status'] = 'success'
+                    except Exception as exc:    # pylint:disable=broad-except
+                        row['service_status'] = 'error'
+                        row['message'] = str(exc)
+
+                writer.writerow(row)
+
+
+@twilio.command()
+@click.option('--auto-purchase', '-y', is_flag=True,
+              help=('Purchase maximum available numbers if less than the requested '
+                    'requested_quantity.'))
+@click.option('--service-number', '-s', help='Messaging service SID to add new numbers to.')
+def purchase_bulk(auto_purchase, service_number):
+    """Purchase new Twilio numbers based on the specified area code counts.
+
+    Accepts a csv with 'area_code' and 'quantity' columns.
+    """
+    purchase_order = []
+    # 327
+    for i in range(1):
+        click.echo(f'Starting round {i}')
+        # name_number = str(i + 11).zfill(3)
+        service_name = f'TextFor2020_{service_number}'
+        try:
+            service = client.messaging.services.create(
+                friendly_name=service_name,
+                inbound_request_url='https://spoke-lambda.politicsrewired.com/twilio',
+                status_callback='https://text.berniesanders.com/twilio-message-report',
+                inbound_method='POST'
+            )
+            click.echo(f'Created service {service_name}')
+        except Exception as exc:
+            click.echo(f'Error creating service: {exc}')
+            return
+
+        x = { 'count': 400 }
+
+        def buy_numbers():
+            numbers = client.available_phone_numbers('US').local.list(sms_enabled=True)
+            formatted_numbers = [number.phone_number for number in numbers]
+            click.echo(f'Buying {formatted_numbers}')
+
+            for number in numbers:
+                phone_number = number.phone_number
+                try:
+                    client.incoming_phone_numbers.create(phone_number=phone_number)
+                    click.echo(f'Bought {phone_number}')
+                    x['count'] = x['count'] - 1
+                    click.echo(x['count'])
+                except Exception as exc:        # pylint:disable=broad-except
+                    click.echo(f'Error buying {phone_number}: {exc}')
+                    continue
+                
+                try:
+                    incoming_phone_number = client.incoming_phone_numbers.list(
+                        phone_number=phone_number
+                    )[0]
+                    phone_number_sid = incoming_phone_number.sid
+                    phone_number_inst = client.messaging \
+                        .services(service.sid) \
+                        .phone_numbers \
+                        .create(phone_number_sid=phone_number_sid)
+                    click.echo(f'Added {phone_number} to message service')
+                except Exception as exc:    # pylint:disable=broad-except
+                    click.echo(f'Error adding {phone_number} to message service: {exc}')
+
+                if x['count'] < 1:
+                    return False
+
+            return True
+
+        while buy_numbers():
+            pass
+
+    return
+
+    for row in reader:
+        area_code = row['area_code']
+        requested_quantity = int(row['quantity'])
+        numbers = client.available_phone_numbers('US').local.list(sms_enabled=true)
         available_count = len(numbers)
         if available_count == 0:
             click.echo((f'Area code ({area_code}) has {available_count} available numbers. '
@@ -391,27 +530,27 @@ def spoke():
 @click.argument('opt-outs-input', type=click.File('r'))
 def upload_opt_outs(number_column, organization_id, campaign_id, assignment_id, user_id, opt_outs_input):
     """Upload list of opt-outs to Spoke."""
-    if not DATABASE_URL:
-        raise click.Abort('DATABASE_URL environment variable is required!')
+    # if not DATABASE_URL:
+    #     raise click.Abort('DATABASE_URL environment variable is required!')
 
-    result = urlparse(DATABASE_URL)
-    username = result.username
-    password = result.password
-    database = result.path[1:]
-    hostname = result.hostname
-    connection = psycopg2.connect(
-        database=database,
-        user=username,
-        password=password,
-        host=hostname
-    )
-    cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    # reader = csv.DictReader(opt_outs_input)
+    # result = urlparse(DATABASE_URL)
+    # username = result.username
+    # password = result.password
+    # database = result.path[1:]
+    # hostname = result.hostname
+    # connection = psycopg2.connect(
+    #     database=database,
+    #     user=username,
+    #     password=password,
+    #     host=hostname
+    # )
+    # cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    reader = csv.DictReader(opt_outs_input)
 
     def exit_smoothly(message=None, exc=None):
         """Handle exits (with errors)."""
-        cursor.close()
-        connection.close()
+        # cursor.close()
+        # connection.close()
 
         if exc:
             if not message:
@@ -426,6 +565,14 @@ def upload_opt_outs(number_column, organization_id, campaign_id, assignment_id, 
         opt_out_numbers = [(format_cell(row[number_column]),) for row in reader]
     except KeyError:
         exit_smoothly(f'Column {number_column} does not exist!')
+
+    print('cell,assignment_id,organization_id,reason_code')
+    for number in opt_out_numbers:
+        print(f'"{number[0]}",1,1,"Previous Hustle Opt-Out"')
+    # print(len(opt_out_numbers))
+    # print(opt_out_numbers[:30])
+    exit_smoothly()
+    return
 
     if not campaign_id:
         # Create dummy campaign to link opt-outs to
